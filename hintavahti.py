@@ -1,24 +1,23 @@
 import os
 import requests
-from bs4 import BeautifulSoup
+import json
 import smtplib
 import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 # ##########################################
-# 1. ASETUKSET (Luetaan ympäristömuuttujista)
+# 1. ASETUKSET (Luetaan turvallisesti Secrets-muuttujista)
 # ##########################################
 URL = "https://www.tankille.fi/suomi/"
 
-LAEHETTAJAE_EMAIL = os.environ.get("EMAIL_USER", "kaapo.villikka@gmail.com")
-LAEHETTAJAE_SALASANA = os.environ.get("EMAIL_PASS", "boom haeq crno nymx")
-VASTAANOTTAJA_EMAIL = os.environ.get("EMAIL_RECEIVER", "kaapo.villikka@hotmail.com")
+LAEHETTAJAE_EMAIL = os.environ.get("EMAIL_USER")
+LAEHETTAJAE_SALASANA = os.environ.get("EMAIL_PASS")
+VASTAANOTTAJA_EMAIL = os.environ.get("EMAIL_RECEIVER")
 
-# Hintaraja float-muodossa
 try:
     HINTARAJA = float(os.environ.get("PRICE_LIMIT", 2.000))
-except ValueError:
+except (ValueError, TypeError):
     HINTARAJA = 2.000
 
 SMTP_PALVELIN = "smtp.gmail.com"
@@ -26,25 +25,27 @@ SMTP_PORTTI = 587
 
 
 # ##########################################
-# 2. HINNAN HAKEMINEN
+# 2. HINNAN HAKEMINEN PROXYN KAUTTA
 # ##########################################
 def hae_halvin_hinta():
+    # Kierrätetään pyyntö ilmaispalvelimen kautta IP-eston kiertämiseksi
+    proxy_url = f"https://api.allorigins.win/get?url={requests.utils.quote(URL)}"
+    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     
     try:
-        response = requests.get(URL, headers=headers, timeout=10)
+        response = requests.get(proxy_url, headers=headers, timeout=15)
         response.raise_for_status()
+        data = response.json()
+        html_contents = data.get("contents", "")
     except Exception as e:
-        print(f"Virhe sivua haettaessa: {e}")
+        print(f"Virhe sivua haettaessa proxyn kautta: {e}")
         return None, None
 
-    soup = BeautifulSoup(response.text, "html.parser")
-    koko_teksti = soup.get_text()
-
     # Etsitään ensimmäinen hinnan muotoinen merkkijono
-    match = re.search(r'(\d[.,]\d{3})', koko_teksti)
+    match = re.search(r'(\d[.,]\d{3})', html_contents)
 
     if match:
         hinta_str = match.group(1).replace(",", ".")
@@ -63,6 +64,10 @@ def hae_halvin_hinta():
 # 3. SÄHKÖPOSTIN LÄHETYS
 # ##########################################
 def laheta_sahkoposti(hinta, asema):
+    if not LAEHETTAJAE_EMAIL or not LAEHETTAJAE_SALASANA or not VASTAANOTTAJA_EMAIL:
+        print("Virhe: Sähköpostiasetukset (EMAIL_USER, EMAIL_PASS, EMAIL_RECEIVER) puuttuvat ympäristömuuttujista!")
+        return
+
     msg = MIMEMultipart()
     msg['From'] = LAEHETTAJAE_EMAIL
     msg['To'] = VASTAANOTTAJA_EMAIL
