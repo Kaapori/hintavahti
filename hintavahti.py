@@ -1,13 +1,12 @@
 import os
 import requests
-import json
 import smtplib
 import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 # ##########################################
-# 1. ASETUKSET (Luetaan turvallisesti Secrets-muuttujista)
+# 1. ASETUKSET
 # ##########################################
 URL = "https://www.tankille.fi/suomi/"
 
@@ -25,23 +24,41 @@ SMTP_PORTTI = 587
 
 
 # ##########################################
-# 2. HINNAN HAKEMINEN PROXYN KAUTTA
+# 2. HINNAN HAKEMINEN (PROXIES + RETRY)
 # ##########################################
 def hae_halvin_hinta():
-    # Kierrätetään pyyntö ilmaispalvelimen kautta IP-eston kiertämiseksi
-    proxy_url = f"https://api.allorigins.win/get?url={requests.utils.quote(URL)}"
+    # Kokeillaan kahta eri ilmaista proxy-palvelua
+    proxy_urls = [
+        f"https://api.allorigins.win/get?url={requests.utils.quote(URL)}",
+        f"https://corsproxy.io/?{requests.utils.quote(URL)}"
+    ]
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-    
-    try:
-        response = requests.get(proxy_url, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        html_contents = data.get("contents", "")
-    except Exception as e:
-        print(f"Virhe sivua haettaessa proxyn kautta: {e}")
+
+    html_contents = ""
+
+    for proxy in proxy_urls:
+        try:
+            print(f"Kokeillaan hakua osoitteesta: {proxy[:35]}...")
+            # Pidennetty aikakatkaisu 30 sekuntiin
+            response = requests.get(proxy, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            if "allorigins" in proxy:
+                data = response.json()
+                html_contents = data.get("contents", "")
+            else:
+                html_contents = response.text
+                
+            if html_contents:
+                break
+        except Exception as e:
+            print(f"Proxy epäonnistui: {e}")
+
+    if not html_contents:
+        print("Sivun hakeminen epäonnistui kaikilla proxyilla.")
         return None, None
 
     # Etsitään ensimmäinen hinnan muotoinen merkkijono
@@ -65,7 +82,7 @@ def hae_halvin_hinta():
 # ##########################################
 def laheta_sahkoposti(hinta, asema):
     if not LAEHETTAJAE_EMAIL or not LAEHETTAJAE_SALASANA or not VASTAANOTTAJA_EMAIL:
-        print("Virhe: Sähköpostiasetukset (EMAIL_USER, EMAIL_PASS, EMAIL_RECEIVER) puuttuvat ympäristömuuttujista!")
+        print("Virhe: Sähköpostiasetukset puuttuvat ympäristömuuttujista!")
         return
 
     msg = MIMEMultipart()
